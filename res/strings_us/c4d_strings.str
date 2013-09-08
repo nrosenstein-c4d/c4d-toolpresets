@@ -1,0 +1,25 @@
+STRINGTABLE {
+    IDS_TOOLPRESETS "Tool Presets";
+    IDS_TOOLPRESETS_HELP "Open the Tool Presets window.";
+    IDS_MISSING_FILE "Missing file '#'.";
+    IDS_PRESET "Preset";
+    IDC_FOLDER "Folder";
+    IDC_TOOLNOTSUPPORTED "This tool is not supported.";
+    IDC_UNKOWNTOOL "Unkown Tool";
+    IDS_ERROR_FILENOTOPENED "File '#' could not be opened.";
+    IDS_ERROR_ACCESSDENIED "Access to file '#' was denied.";
+    IDS_ERROR_NAMEEMPTY "The name must not be empty.";
+    IDC_ERROR_RENAMEFAILED "Could not rename '#' to '#'";
+    IDC_ERROR_FOLDERCREATIONFAILED "Folder '#' could not be created.";
+    IDC_ERROR_FOLDEREXISTS "Folder '#' does already exist.";
+    IDC_ASK_REMOVEALL "Do you really want to remove all presets?";
+    IDC_ASK_REMOVENODE "Do you want to remove this preset?";
+    IDC_ASK_REMOVENODE_MULTIPLE "Do you want to remove # presets?";
+    IDC_ERROR_PRESETSNOTREMOVED "Some presets could not be removed: #";
+
+    MENU_FILE "File";
+    MENU_FILE_SETTINGS "Settings...";
+
+    CONTEXT_NEWFOLDER "New Folder...";
+    CONTEXT_OPEN "Show in File Manager...";
+}

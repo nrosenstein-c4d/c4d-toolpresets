@@ -1,0 +1,5 @@
+*.cache
+*.pyo
+*.pyc
+*.pype # <  R15 encrypted Python plugin
+*.pypv # >= R15 encrypted Python plugin
