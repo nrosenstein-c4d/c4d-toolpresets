@@ -25,7 +25,7 @@ res, importer = c4dtools.prepare(cache=False)
 res.new_symbols('TREEVIEW', 'COLUMN_MAIN', 'BMPB_SAVE', 'BMPB_RELOAD',
                 'STR_TOOL', 'BMPB_TOOL', 'GRP_MAIN', 'GRP_TOOL')
 options = Attributor({
-    'defaultw': 600,
+    'defaultw': 200,
     'defaulth': 300,
     'iconsize': 18,
     'hpadding': 3,
@@ -103,23 +103,6 @@ def scale_bmp(bmp, dw, dh=None, src=None):
     dh -= 1
     bmp.ScaleBicubic(dst, sx, sy, sx2, sy2, 0, 0, dw, dh)
     return dst
-
-def open_path(path):
-    if not os.path.exists(path):
-        return False
-    if not os.path.isdir(path):
-        dpath = os.path.dirname(path)
-
-    system = platform.system()
-    if system == 'Windows':
-        args = ['explorer', '/select,', path]
-    elif system == 'Darwin':
-        args = ['open', dpath]
-    else:
-        args = ['xdg-open', dpath]
-
-    if args:
-        subprocess.Popen(args)
 
 
 class BaseTreeNode(treenode.TreeNode):
@@ -560,7 +543,7 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
             if not curr:
                 return True
 
-            open_path(curr.path)
+            c4d.storage.ShowInFinder(curr.path)
         elif command == c4d.ID_TREEVIEW_CONTEXT_RESET:
             result = MessageDialog(res['IDC_ASK_REMOVEALL'], c4d.GEMB_YESNO)
             if result != c4d.GEMB_R_YES:
@@ -825,6 +808,7 @@ class ToolPresetsDialog(GeDialog):
                     res.BMPB_SAVE, options.icon_save)
             self.bmpb_reload = self.AddBitmapButton(
                     res.BMPB_RELOAD, options.icon_reload)
+
             self.AddCheckbox(res.CHK_ALL, 0, 0, 0, name=res.string.CHK_ALL)
             self.GroupEnd()
 
