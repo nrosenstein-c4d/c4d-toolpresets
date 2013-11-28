@@ -25,6 +25,8 @@ enum {
 
     CONTEXT_NEWFOLDER,
     CONTEXT_OPEN,
+
+    CHK_ALL,
 };
 
 #endif

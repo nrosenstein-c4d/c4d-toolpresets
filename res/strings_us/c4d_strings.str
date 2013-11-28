@@ -22,4 +22,6 @@ STRINGTABLE {
 
     CONTEXT_NEWFOLDER "New Folder...";
     CONTEXT_OPEN "Show in File Manager...";
+
+    CHK_ALL "Show All";
 }

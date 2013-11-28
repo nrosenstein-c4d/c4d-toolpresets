@@ -261,7 +261,7 @@ class BaseTreeNode(treenode.TreeNode):
         def cb(x):
             if max_ >= 0 and len(res) >= max_:
                 return False
-            if x.selected:  
+            if x.selected:
                 res.append(x)
             return True
         self.traverse(cb)
@@ -825,6 +825,7 @@ class ToolPresetsDialog(GeDialog):
                     res.BMPB_SAVE, options.icon_save)
             self.bmpb_reload = self.AddBitmapButton(
                     res.BMPB_RELOAD, options.icon_reload)
+            self.AddCheckbox(res.CHK_ALL, 0, 0, 0, name=res.string.CHK_ALL)
             self.GroupEnd()
 
         # Tree-View Group
@@ -845,6 +846,8 @@ class ToolPresetsDialog(GeDialog):
 
         layout = BaseContainer()
         layout.SetLong(res.COLUMN_MAIN, c4d.LV_USERTREE)
+        self.model.show_all = True
+        self.SetBool(res.CHK_ALL, True)
         self.tree.SetLayout(1, layout)
         self.tree.SetRoot(self.root, self.model, None)
         self.Reload()
@@ -863,6 +866,9 @@ class ToolPresetsDialog(GeDialog):
             doc = GetActiveDocument()
             doc.SetAction(doc.GetAction())
             c4d.EventAdd()
+        elif id == res.CHK_ALL:
+            self.model.show_all = self.GetLong(res.CHK_ALL)
+            self.Reload()
         return True
 
     def CoreMessage(self, id, msg):
