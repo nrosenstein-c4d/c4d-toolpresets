@@ -26,6 +26,14 @@ enum {
     CONTEXT_NEWFOLDER,
     CONTEXT_OPEN,
 
+    TREEVIEW,
+    COLUMN_MAIN,
+    BMPB_SAVE,
+    BMPB_RELOAD,
+    STR_TOOL,
+    BMPB_TOOL,
+    GRP_MAIN,
+    GRP_TOOL,
     CHK_ALL,
 };
 
