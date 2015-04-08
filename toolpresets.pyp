@@ -336,6 +336,8 @@ class ToolPreset(BaseTreeNode):
 
     def __init__(self, data, name, path):
         super(ToolPreset, self).__init__(name, path)
+        index = name.rfind('.')
+        if index > 0: name = name[:index]
         self.name = name
         self.data = c4d.BaseContainer(data)
 
@@ -833,16 +835,13 @@ class ToolPresetsDialog(GeDialog):
     # c4d.gui.GeDialog
 
     def CreateLayout(self):
-        self.MenuFlushAll()
-        self.MenuAddString(*res.tup('MENU_FILE_SETTINGS'))
-        self.MenuFinished()
-
         self.SetTitle(res.string('IDS_TOOLPRESETS'))
         fullfit = c4d.BFH_SCALEFIT | c4d.BFV_SCALEFIT
 
         # Menu-line Group
         if not self.GroupBeginInMenuLine():
             return False
+        self.GroupSpace(4, 0)
         if not self.GroupBegin(res.GRP_TOOL, 0):
             return False
         self.AddStaticText(res.STR_TOOL, 0)
@@ -877,8 +876,8 @@ class ToolPresetsDialog(GeDialog):
 
         layout = BaseContainer()
         layout.SetLong(res.COLUMN_MAIN, c4d.LV_USERTREE)
-        self.model.show_all = True
-        self.SetBool(res.CHK_ALL, True)
+        self.model.show_all = False
+        self.SetBool(res.CHK_ALL, False)
         self.tree.SetLayout(1, layout)
         self.tree.SetRoot(self.root, self.model, None)
         self.Reload()
@@ -886,10 +885,7 @@ class ToolPresetsDialog(GeDialog):
         return True
 
     def Command(self, id, msg):
-        if id == res.MENU_FILE_SETTINGS:
-            # TODO: Open settings dialog
-            pass
-        elif id == res.BMPB_SAVE:
+        if id == res.BMPB_SAVE:
             self.SaveState()
         elif id == res.BMPB_RELOAD:
             self.Reload()
