@@ -70,6 +70,8 @@ class options:
     presets_glob = '*.tpr'
 
 
+PLUGIN_ID = 1000005
+
 # Sent to reload all data.
 MSG_TOOLPRESETS_RELOAD = 1030473
 
@@ -85,11 +87,13 @@ MSG_TOOLPRESETS_SELFCOMMAND = 1030475
 # that are to be displayed.
 messages = []
 
+
 def init_options():
     r"""
     Called to initialize values in the options attributor.
     """
     pass
+
 
 def get_bmp(icon):
     if not icon:
@@ -98,6 +102,7 @@ def get_bmp(icon):
         return icon
     else:
         return icon['bmp']
+
 
 def scale_bmp(bmp, dw, dh=None, src=None):
     if not bmp:
@@ -126,6 +131,44 @@ def scale_bmp(bmp, dw, dh=None, src=None):
     dh -= 1
     bmp.ScaleBicubic(dst, sx, sy, sx2, sy2, 0, 0, dw, dh)
     return dst
+
+
+class Data(object):
+
+    ID_PRESET_PATH = 1000
+    ID_SHOW_ALL = 1001
+
+    DEFAULT_PATH = c4d.storage.GeGetC4DPath(c4d.C4D_PATH_LIBRARY_USER)
+    DEFAULT_PATH = os.path.join(DEFAULT_PATH, 'toolpresets')
+
+    def __init__(self):
+        super(Data, self).__init__()
+        self.bc = c4d.plugins.GetWorldPluginData(PLUGIN_ID)
+        if self.bc is None:
+            self.bc = c4d.BaseContainer()
+
+    def save(self):
+        c4d.plugins.SetWorldPluginData(PLUGIN_ID, self.bc)
+
+    def get_preset_path(self):
+        return self.bc.GetString(self.ID_PRESET_PATH, self.DEFAULT_PATH)
+
+    def set_preset_path(self, path):
+        self.bc.SetString(self.ID_PRESET_PATH, path)
+
+    def get_show_all(self):
+        return self.bc.GetBool(self.ID_SHOW_ALL)
+
+    def set_show_all(self, show):
+        self.bc.SetBool(self.ID_SHOW_ALL, show)
+
+    preset_path = property(get_preset_path, set_preset_path)
+    show_all = property(get_show_all, set_show_all)
+
+
+pdata = Data()
+
+
 
 
 class BaseTreeNode(TreeNode):
@@ -188,11 +231,11 @@ class BaseTreeNode(TreeNode):
         if column == res.COLUMN_MAIN:
             return self.name
 
-    def get_bg_col(self, column, area, bgcol):
-        return bgcol
+    def get_bg_col(self, row):
+        return None
 
-    def get_text_col(self, column, area, col):
-        return col
+    def get_text_col(self, column):
+        return None
 
     def get_column_width(self, column, area):
         w = 0
@@ -212,12 +255,12 @@ class BaseTreeNode(TreeNode):
 
         # Draw the background onto the area.
         area = df['frame']
-        area.DrawSetPen(self.get_bg_col(column, area, bgcol))
+        area.DrawSetPen(bgcol)
         area.DrawRectangle(x1, y1, x2, y2)
 
         # Set the text color.
         tcol = c4d.COLOR_TEXTFOCUS if self.selected else c4d.COLOR_TEXT
-        tcol = self.get_text_col(column, area, tcol)
+        tcol = self.get_text_col(column) or tcol
         area.DrawSetTextCol(tcol, c4d.COLOR_TRANS)
 
         # Retrieve the draw information for the cell.
@@ -295,6 +338,7 @@ class BaseTreeNode(TreeNode):
         self.traverse(cb)
         return result
 
+
 class RootNode(BaseTreeNode):
 
     type_id = 4
@@ -330,6 +374,7 @@ class RootNode(BaseTreeNode):
             return True
         self.traverse(cb)
 
+
 class ToolPreset(BaseTreeNode):
 
     type_id = 3
@@ -360,6 +405,7 @@ class ToolPreset(BaseTreeNode):
         c4d.SpecialEventAdd(MSG_TOOLPRESETS_SELFCOMMAND)
         c4d.EventAdd()
 
+
 class ToolPresetFolder(BaseTreeNode):
 
     type_id = 4
@@ -386,6 +432,7 @@ class ToolPresetFolder(BaseTreeNode):
         for child in children:
             child.sort(recursive, key)
 
+
 class ToolNode(ToolPresetFolder):
 
     type_id = 2
@@ -408,26 +455,14 @@ class ToolNode(ToolPresetFolder):
         doc.SetAction(self.pluginid)
         c4d.EventAdd()
 
-    def get_bg_col(self, column, area, bgcol):
+    def get_bg_col(self, row):
         col = None
-        """
         doc = GetActiveDocument()
         if doc.GetAction() == self.pluginid:
             col = options.active_tool_color
-        """
-        if not col:
-            col = bgcol
         return col
 
-    def get_text_col(self, column, area, col):
-        doc = GetActiveDocument()
-        if doc.GetAction() == self.pluginid:
-            if self.selected:
-                col = options.active_tool_selected or col
-            else:
-                col = options.active_tool_deselected or col
 
-        return col
 
 
 class ToolsPresetsHierarchy(TreeViewFunctions):
@@ -485,6 +520,10 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
 
     def GetColumnWidth(self, root, ud, curr, col, area):
         return curr.get_column_width(col, area)
+
+    def GetBackgroundColor(self, root, ud, curr, row, color):
+        color = curr.get_bg_col(row)
+        return color or c4d.COLOR_BG
 
     def DrawCell(self, root, ud, curr, column, df, bgcol):
         curr.draw_cell(column, df, bgcol)
@@ -604,6 +643,7 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
             return True
 
         return False
+
 
 class ToolPresetsDialog(GeDialog):
 
@@ -789,7 +829,7 @@ class ToolPresetsDialog(GeDialog):
         bmpb = self.AddCustomGui(
                 id, c4d.CUSTOMGUI_BITMAPBUTTON, "", 0,
                 0, 0, cd)
-        icon = scale_bmp(icon, options.iconsize)
+        icon =  scale_bmp(icon, options.iconsize)
         if icon:
             bmpb.SetImage(icon)
         return bmpb
@@ -876,8 +916,8 @@ class ToolPresetsDialog(GeDialog):
 
         layout = BaseContainer()
         layout.SetLong(res.COLUMN_MAIN, c4d.LV_USERTREE)
-        self.model.show_all = False
-        self.SetBool(res.CHK_ALL, False)
+        self.model.show_all = pdata.show_all
+        self.SetBool(res.CHK_ALL, pdata.show_all)
         self.tree.SetLayout(1, layout)
         self.tree.SetRoot(self.root, self.model, None)
         self.Reload()
@@ -894,17 +934,19 @@ class ToolPresetsDialog(GeDialog):
             doc.SetAction(doc.GetAction())
             c4d.EventAdd()
         elif id == res.CHK_ALL:
+            pdata.show_all = self.GetLong(res.CHK_ALL)
             self.model.show_all = self.GetLong(res.CHK_ALL)
             self.Reload()
         return True
 
     def CoreMessage(self, id, msg):
         # Process messages that are to be displayed.
-        for message in messages:
-            MessageDialog(message)
-        messages[:] = []
+        while messages:
+            MessageDialog(messages.pop())
 
         if id == c4d.EVMSG_CHANGE:
+            if not self.selftriggered:
+                self.root.select_all(False)
             self.Refresh()
             self.UpdateMenuLine()
         elif id == MSG_TOOLPRESETS_RELOAD:
@@ -915,6 +957,7 @@ class ToolPresetsDialog(GeDialog):
             self.selftriggered = True
         return True
 
+
 class ToolPresetsCommand(c4d.plugins.CommandData):
 
     @property
@@ -924,10 +967,10 @@ class ToolPresetsCommand(c4d.plugins.CommandData):
         return self._dialog
 
 
-    PLUGIN_ID = 1000005
+    PLUGIN_ID = PLUGIN_ID
     PLUGIN_NAME = res.string('IDS_TOOLPRESETS')
     PLUGIN_HELP = res.string('IDS_TOOLPRESETS_HELP')
-    PLUGIN_ICON = res.bitmap('icon.tif')
+    PLUGIN_ICON = res.bitmap('res', 'icon.tif')
 
     def register(self):
         return c4d.plugins.RegisterCommandPlugin(
@@ -945,42 +988,18 @@ class ToolPresetsCommand(c4d.plugins.CommandData):
         return self.dialog.Restore(self.PLUGIN_ID, secret)
 
 
-class Data(object):
 
-    ID_DATA = ToolPresetsCommand.PLUGIN_ID
-    ID_PRESET_PATHS = 1000
 
-    DEFAULT_PATH = c4d.storage.GeGetC4DPath(c4d.C4D_PATH_LIBRARY_USER)
-    DEFAULT_PATH = os.path.join(DEFAULT_PATH, 'toolpresets')
-
-    @property
-    def data(self):
-        return c4d.plugins.GetWorldPluginData(self.ID_DATA) \
-               or BaseContainer()
-
-    @data.setter
-    def data(self, bc):
-        c4d.plugins.SetWorldPluginData(self.ID_DATA, data, True)
-
-    @property
-    def preset_path(self):
-        bc = self.data
-        return bc.GetString(self.ID_PRESET_PATHS, self.DEFAULT_PATH)
-
-    @preset_path.setter
-    def preset_path(self, paths):
-        bc = BaseContainer()
-        bc.SetString(self.ID_PRESET_PATHS, paths)
-        self.data = bc
-
-pdata = Data()
+def PluginMessage(msg_type, data):
+    if msg_type in [c4d.C4DPL_RELOADPYTHONPLUGINS, c4d.C4DPL_ENDPROGRAM]:
+        pdata.save()
+    return True
 
 
 def main():
     init_options()
     ToolPresetsCommand().register()
 
+
 if __name__ == '__main__':
     main()
-
-
