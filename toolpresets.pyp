@@ -658,6 +658,7 @@ class ToolPresetsDialog(GeDialog):
 
     def __init__(self):
         super(ToolPresetsDialog, self).__init__()
+        self.AddGadget(c4d.DIALOG_NOMENUBAR, 0)
         self.root = RootNode()
         self.model = ToolsPresetsHierarchy()
 
@@ -878,39 +879,36 @@ class ToolPresetsDialog(GeDialog):
         self.SetTitle(res.string('IDS_TOOLPRESETS'))
         fullfit = c4d.BFH_SCALEFIT | c4d.BFV_SCALEFIT
 
-        # Menu-line Group
-        if not self.GroupBeginInMenuLine():
-            return False
-        self.GroupSpace(4, 0)
-        if not self.GroupBegin(res.GRP_TOOL, 0):
-            return False
-        self.AddStaticText(res.STR_TOOL, 0)
-        self.bmpb_tool = self.AddBitmapButton(res.BMPB_TOOL, None)
-        self.AddStaticText(0, 0, name=':')
-        self.GroupEnd()
+        self.GroupSpace(0, 0)
+        self.GroupBorderSpace(2, 2, 2, 2)
 
-        self.bmpb_save = self.AddBitmapButton(
-                res.BMPB_SAVE, options.icon_save)
-        self.bmpb_reload = self.AddBitmapButton(
-                res.BMPB_RELOAD, options.icon_reload)
+        # Top-line Group
+        if self.GroupBegin(0, c4d.BFH_SCALEFIT):
+            self.GroupSpace(4, 0)
+            self.AddGadget(c4d.DIALOG_PIN, 0)
 
-        self.AddCheckbox(res.CHK_ALL, 0, 0, 0, name=res.string('CHK_ALL'))
-        self.GroupEnd()
+            if self.GroupBegin(res.GRP_TOOL, c4d.BFH_SCALEFIT):
+                self.bmpb_tool = self.AddBitmapButton(res.BMPB_TOOL, None)
+                self.AddStaticText(res.STR_TOOL, 0)
+                self.GroupEnd()
+
+            self.bmpb_save = self.AddBitmapButton(
+                    res.BMPB_SAVE, options.icon_save)
+            self.AddCheckbox(res.CHK_ALL, 0, 0, 0, name=res.string('CHK_ALL'))
+            self.GroupEnd()
+
+        self.AddSeparatorH(0)
 
         # Tree-View Group
-        if not self.GroupBegin(res.GRP_MAIN, fullfit, cols=1):
-            return False
-        cd = BaseContainer()
-        cd.SetBool(c4d.TREEVIEW_ALTERNATE_BG, True)
-        self.tree = self.AddCustomGui(
-                res.TREEVIEW, c4d.CUSTOMGUI_TREEVIEW, "", fullfit,
-                0, 0, cd)
-        self.GroupEnd()
+        if self.GroupBegin(res.GRP_MAIN, fullfit, cols=1):
+            self.tree = self.AddCustomGui(
+                res.TREEVIEW, c4d.CUSTOMGUI_TREEVIEW, "", fullfit, 0, 0)
+            self.GroupEnd()
 
+        self.UpdateMenuLine()
         return True
 
     def InitValues(self):
-        self.UpdateMenuLine()
         if not self.tree:
             return False
 
