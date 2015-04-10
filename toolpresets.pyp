@@ -3,33 +3,89 @@
 # Copyright (C) 2015, Niklas Rosenstein
 # All rights reserved.
 
-exec ("""import os, sys, glob      # _localimport context-manager             #
-class _localimport(object):        # by Niklas Rosenstein, Copyright (C) 2015 #
-    _modulecache = []              # Licensed under MIT                       #
-    _eggs = staticmethod(lambda x: glob.glob(os.path.join(x, '*.egg')))
-    def __init__(s, libpath, autoeggs=False, isolate=False, path=os.path):
-        if not path.isabs(libpath):
-            libpath = path.join(path.dirname(path.abspath(__file__)), libpath)
-        s.libpath = libpath; s.autoeggs = autoeggs; s.isolate = isolate
-    def __enter__(s):
-        s._path, s._mpath = list(sys.path), list(sys.meta_path)
-        s._mods = frozenset(sys.modules.keys())
-        sys.path.append(s.libpath)
-        sys.path.extend(s._eggs(s.libpath) if s.autoeggs else [])
-    def __exit__(s, *args):
-        sys.path[:] = s._path; sys.meta_path[:] = s._mpath
-        for key in sys.modules.keys():
-            if key not in s._mods and s._islocal(sys.modules[key]):
-                s._modulecache.append(sys.modules.pop(key))
-    def _islocal(s, mod):
-        if s.isolate: return True
-        filename = getattr(mod, '__file__', None)
-        if filename:
-            try: s = os.path.relpath(filename, s.libpath)
-            except ValueError: return False
-            else: return s == os.curdir or not s.startswith(os.pardir)
-        else: return False""")
+exec (r"""
+# _localimport context-manager
+# Copyright (C) 2015  Niklas Rosenstein
+# Licensed under the MIT license
+# see https://gist.github.com/NiklasRosenstein/f5690d8f36bbdc8e5556
 
+import os, sys, glob
+class _localimport(object):
+    project_path = os.path.dirname(os.path.abspath(__file__))
+    stdlib_dir = os.path.dirname(os.path.dirname(os.__file__))
+    def __init__(self, libpath, autoeggs=False, isolate=False, path=os.path):
+        if not os.path.isabs(libpath):
+            libpath = os.path.join(self.project_path, libpath)
+        self.libpath = libpath
+        self.autoeggs = autoeggs
+        self.isolate = isolate
+        self.path = [self.libpath] + self.eggs()
+        self.modules = {}
+        self.meta_path = []
+    def __enter__(self):
+        # Save the previous state of the import mechanism to restore it later.
+        self._cache = {
+            'path': sys.path[:],
+            'meta_path': sys.meta_path[:],
+            'disabled_modules': {},
+            'prev_modules': frozenset(sys.modules.keys()),
+        }
+        # Update the path and meta_path.
+        sys.path[:] = self.path + sys.path
+        sys.meta_path[:] = self.meta_path + sys.meta_path
+        # In isolate mode, disable all modules that are not stdlib
+        # modules. Also disable all None modules so we can restore them.
+        for key, mod in sys.modules.items():
+            if mod is None or (self.isolate and not self.is_stdlib(mod)):
+                self._cache['disabled_modules'][key] = sys.modules.pop(key)
+        # Restore modules imported with _localimport.
+        for key, mod in self.modules.iteritems():
+            if key in sys.modules:
+                self._cache['disabled_modules'][key] = sys.modules.pop(key)
+            sys.modules[key] = mod
+        return self
+    def __exit__(self, *args):
+        # Move newly added meta_path objects to self.meta_path.
+        for meta in sys.meta_path:
+            if meta not in self._cache['meta_path']:
+                if meta not in self.meta_path:
+                    self.meta_path.append(meta)
+        # Move newly added modules to self.modules.
+        for key, mod in sys.modules.items():
+            remove = mod is None or key in self._cache['disabled_modules']
+            remove = remove or key not in self._cache['prev_modules']
+            remove = remove or key in self.modules
+            if remove:
+                self.modules[key] = sys.modules.pop(key)
+        # Restore disabled modules.
+        sys.modules.update(self._cache['disabled_modules'])
+        # Make sure we did everything right with the meta path.
+        meta_path_sum = len(self._cache['meta_path']) + len(self.meta_path)
+        assert len(sys.meta_path) == meta_path_sum, \
+            "_localimport: Error restoring meta_path state. Please report"
+        # Make sure we did everything right with the modules dict.
+        diff_modules = set(sys.modules.keys()).difference(
+            self._cache['prev_modules'])
+        assert not diff_modules, \
+            "_localimport: Error restoring module state. Please report\n" \
+            "Failed to flush modules: {0}".format(diff_modules)
+        # Restore the path and meta_path
+        sys.path[:] = self._cache['path']
+        sys.meta_path[:] = self._cache['meta_path']
+        # Delete cache attributes.
+        del self._cache
+    def eggs(self):
+        if not self.autoeggs: return []
+        return glob.glob(os.path.join(self.libpath, '*.egg'))
+    def is_subpath(self, filename, dirname):
+        try: f = os.path.relpath(filename, dirname)
+        except ValueError: return False
+        else: return f == os.curdir or not f.startswith(os.pardir)
+    def is_stdlib(self, mod):
+        filename = getattr(mod, '__file__', None)
+        if not filename: return True
+        return self.is_subpath(filename, self.stdlib_dir)
+""")
 
 import os
 import re
@@ -46,7 +102,7 @@ from c4d.storage import HyperFile
 from c4d.documents import GetActiveDocument
 
 
-with _localimport('lib', autoeggs=True):
+with _localimport('lib', isolate=True, autoeggs=True):
     import res
     from c4dtools.structures.treenode import TreeNode
 
@@ -781,14 +837,14 @@ class ToolPresetsDialog(GeDialog):
         self.Refresh()
         return True
 
-    def AddBitmapButton(self, id, icon, cd=None):
-        if cd is None:
-            cd = BaseContainer()
-            cd.SetBool(c4d.BITMAPBUTTON_BUTTON, True)
+    def AddBitmapButton(self, param, icon):
+        bc = BaseContainer()
+        bc.SetBool(c4d.BITMAPBUTTON_BUTTON, True)
+        # bc.SetLong(c4d.BITMAPBUTTON_BACKCOLOR, c4d.COLOR_BG)  # doesnt work
 
         bmpb = self.AddCustomGui(
-                id, c4d.CUSTOMGUI_BITMAPBUTTON, "", 0,
-                0, 0, cd)
+            id=param, pluginid=c4d.CUSTOMGUI_BITMAPBUTTON, name="",
+            flags=0, minw=0, minh=0, customdata=bc)
         icon = scale_bmp(icon, options.iconsize)
         if icon:
             bmpb.SetImage(icon)
