@@ -10,6 +10,7 @@ exec (r"""
 # see https://gist.github.com/NiklasRosenstein/f5690d8f36bbdc8e5556
 
 import os, sys, glob
+_localimport_objects = []  # must not loose reference to cache in importer
 class _localimport(object):
     project_path = os.path.dirname(os.path.abspath(__file__))
     stdlib_dir = os.path.dirname(os.path.dirname(os.__file__))
@@ -22,6 +23,7 @@ class _localimport(object):
         self.path = [self.libpath] + self.eggs()
         self.modules = {}
         self.meta_path = []
+        _localimport_objects.append(self)
     def __enter__(self):
         # Save the previous state of the import mechanism to restore it later.
         self._cache = {
