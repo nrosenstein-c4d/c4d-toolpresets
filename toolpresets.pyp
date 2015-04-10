@@ -126,6 +126,8 @@ class options:
     presets_glob = '*.tpr'
 
 
+PLUGIN_ID = 1000005
+
 # Sent to reload all data.
 MSG_TOOLPRESETS_RELOAD = 1030473
 
@@ -136,24 +138,6 @@ MSG_TOOLPRESETS_REFRESH = 1030474
 # was triggered by itself.
 MSG_TOOLPRESETS_SELFCOMMAND = 1030475
 
-# Opening a MessageDialog in TreeViewFunctions.SetName()
-# will re-trigger the method. This list keeps track of messages
-# that are to be displayed.
-messages = []
-
-def init_options():
-    r"""
-    Called to initialize values in the options attributor.
-    """
-    pass
-
-def get_bmp(icon):
-    if not icon:
-        return None
-    if isinstance(icon, BaseBitmap):
-        return icon
-    else:
-        return icon['bmp']
 
 def scale_bmp(bmp, dw, dh=None, src=None):
     if not bmp:
@@ -184,6 +168,52 @@ def scale_bmp(bmp, dw, dh=None, src=None):
     return dst
 
 
+def del_suffix(path):
+    dirname, base = os.path.split(path)
+    index = base.rfind('.')
+    if index > 0:
+        base = base[:index]
+    return os.path.join(dirname, base)
+
+
+class Data(object):
+
+    ID_PRESET_PATH = 1000
+    ID_SHOW_ALL = 1001
+
+    DEFAULT_PATH = c4d.storage.GeGetC4DPath(c4d.C4D_PATH_LIBRARY_USER)
+    DEFAULT_PATH = os.path.join(DEFAULT_PATH, 'toolpresets')
+
+    def __init__(self):
+        super(Data, self).__init__()
+        self.bc = c4d.plugins.GetWorldPluginData(PLUGIN_ID)
+        if self.bc is None:
+            self.bc = c4d.BaseContainer()
+
+    def save(self):
+        c4d.plugins.SetWorldPluginData(PLUGIN_ID, self.bc)
+
+    def get_preset_path(self):
+        return self.bc.GetString(self.ID_PRESET_PATH, self.DEFAULT_PATH)
+
+    def set_preset_path(self, path):
+        self.bc.SetString(self.ID_PRESET_PATH, path)
+
+    def get_show_all(self):
+        return self.bc.GetBool(self.ID_SHOW_ALL)
+
+    def set_show_all(self, show):
+        self.bc.SetBool(self.ID_SHOW_ALL, show)
+
+    preset_path = property(get_preset_path, set_preset_path)
+    show_all = property(get_show_all, set_show_all)
+
+
+pdata = Data()
+
+
+
+
 class BaseTreeNode(TreeNode):
 
     type_id = 1
@@ -191,26 +221,14 @@ class BaseTreeNode(TreeNode):
     open = False
     selected = False
     prev_selected = False
+    loaded = True
 
-    def __init__(self, name, path):
+    def __init__(self, path):
         super(BaseTreeNode, self).__init__()
-        self.name = name
         self.path = path
+        self.name = del_suffix(os.path.basename(path))
 
-    @property
-    def path(self):
-        if self.parent and self.parent.path:
-            return os.path.join(self.parent.path, os.path.basename(self._path))
-        else:
-            return self._path
-
-    @property
-    def child(self):
-        return self.down
-
-    @path.setter
-    def path(self, path):
-        self._path = path
+    child = TreeNode.down
 
     def traverse(self, callback):
         if not callback(self):
@@ -220,15 +238,21 @@ class BaseTreeNode(TreeNode):
                 return False
         return True
 
-    def list_children(self):
-        return list(self.iter_children())
-
-    def sort(self, *a, **kw):
-        children = self.list_children()
-        children.sort(*a, **kw)
-        for child in children:
+    def sort(self, recursive=True, *a, **kw):
+        folders = []
+        others = []
+        for child in self.iter_children():
+            if isinstance(child, ToolPresetFolder):
+                folders.append(child)
+            else:
+                others.append(child)
+        folders.sort(*a, **kw)
+        others.sort(*a, **kw)
+        for child in folders + others:
             child.remove()
             self.append(child)
+            if recursive:
+                child.sort(True, *a, **kw)
 
     def get_icon(self, column):
         icon = None
@@ -242,13 +266,16 @@ class BaseTreeNode(TreeNode):
 
     def text_for_column(self, column):
         if column == res.COLUMN_MAIN:
-            return self.name
+            text = self.name
+        if not self.loaded:
+            text = '[!] {0}'.format(text)
+        return text
 
-    def get_bg_col(self, column, area, bgcol):
-        return bgcol
+    def get_bg_col(self, row):
+        return None
 
-    def get_text_col(self, column, area, col):
-        return col
+    def get_text_col(self, column):
+        return None
 
     def get_column_width(self, column, area):
         w = 0
@@ -268,12 +295,12 @@ class BaseTreeNode(TreeNode):
 
         # Draw the background onto the area.
         area = df['frame']
-        area.DrawSetPen(self.get_bg_col(column, area, bgcol))
+        area.DrawSetPen(bgcol)
         area.DrawRectangle(x1, y1, x2, y2)
 
         # Set the text color.
         tcol = c4d.COLOR_TEXTFOCUS if self.selected else c4d.COLOR_TEXT
-        tcol = self.get_text_col(column, area, tcol)
+        tcol = self.get_text_col(column) or tcol
         area.DrawSetTextCol(tcol, c4d.COLOR_TRANS)
 
         # Retrieve the draw information for the cell.
@@ -312,30 +339,24 @@ class BaseTreeNode(TreeNode):
 
     def rename(self, name):
         dirname = os.path.dirname(self.path)
-        name_full = os.path.join(dirname, name)
-        if not os.path.exists(self.path):
-            self.path = name_full
-            self.save()
+        path = os.path.join(dirname, name)
+        if isinstance(self, ToolPreset):
+            path = path + options.presets_suffix
+
+        if os.path.exists(self.path):
+            os.renames(self.path, path)
         else:
-            try:
-                os.rename(self.path, name_full)
-                self.path = name_full
-            except OSError:
-                return False
+            self.path = path
+            self.save()
+
         self.name = name
-        return True
 
     def delete(self):
-        if os.path.exists(self.path):
-            try:
-                if os.path.isdir(self.path):
-                    shutil.rmtree(self.path)
-                else:
-                    os.remove(self.path)
-            except OSError:
-                return False
+        if os.path.isdir(self.path):
+            shutil.rmtree(self.path)
+        else:
+            os.remove(self.path)
         self.remove()
-        return True
 
     def action(self):
         pass
@@ -351,12 +372,13 @@ class BaseTreeNode(TreeNode):
         self.traverse(cb)
         return result
 
+
 class RootNode(BaseTreeNode):
 
     type_id = 4
 
     def __init__(self):
-        super(RootNode, self).__init__('root', None)
+        super(RootNode, self).__init__('root')
 
     @property
     def path(self):
@@ -386,18 +408,56 @@ class RootNode(BaseTreeNode):
             return True
         self.traverse(cb)
 
+
 class ToolPreset(BaseTreeNode):
 
     type_id = 3
 
-    def __init__(self, data, name, path):
-        super(ToolPreset, self).__init__(name, path)
-        index = name.rfind('.')
-        if index > 0: name = name[:index]
-        self.name = name
-        self.data = c4d.BaseContainer(data)
+    def __init__(self, path, data=None):
+        super(ToolPreset, self).__init__(path)
+        if data is not None:
+            self.data = data
+            self.loaded = True
+        else:
+            self.load()
+
+    def load(self):
+        self.data = None
+        self.loaded = False
+        if not os.path.isfile(self.path):
+            return False
+
+        hf = HyperFile()
+        success = hf.Open(0, self.path, c4d.FILEOPEN_READ, c4d.FILEDIALOG_NONE)
+        if not success:
+            return False
+
+        self.data = hf.ReadContainer()
+        self.loaded = self.data is not None
+
+        hf.Close()
+        return True
+
+    def save(self):
+        if self.data is None:
+            raise ValueError('no data to be saved')
+
+        dirname = os.path.dirname(self.path)
+        if not os.path.isdir(dirname):
+            os.makedirs(dirname)
+
+        hf = HyperFile()
+        success = hf.Open(0, self.path, c4d.FILEOPEN_WRITE, c4d.FILEDIALOG_NONE)
+        if not success:
+            raise IOError('could not open HyperFile at "{0}"'.format(self.path))
+
+        hf.WriteContainer(self.data)
+        hf.Close()
 
     def action(self):
+        if self.data is None:
+            return None
+
         doc = GetActiveDocument()
 
         # Change to the tool.
@@ -416,40 +476,22 @@ class ToolPreset(BaseTreeNode):
         c4d.SpecialEventAdd(MSG_TOOLPRESETS_SELFCOMMAND)
         c4d.EventAdd()
 
+
 class ToolPresetFolder(BaseTreeNode):
 
     type_id = 4
     isfolder = True
 
-    def sort(self, recursive=True, key=lambda x: x.name):
-        children = self.list_children()
-        folders = []
-        others = []
-
-        for child in children:
-            child.remove()
-            if isinstance(child, ToolPresetFolder):
-                folders.append(child)
-            else:
-                others.append(child)
-
-        folders.sort(key=key)
-        others.sort(key=key)
-
-        [self.append(c) for c in folders]
-        [self.append(c) for c in others]
-
-        for child in children:
-            child.sort(recursive, key)
 
 class ToolNode(ToolPresetFolder):
 
     type_id = 2
     isfolder = True
 
-    def __init__(self, pluginid, name, path):
-        super(ToolNode, self).__init__(name, path)
+    def __init__(self, pluginid, path, toolname):
+        super(ToolNode, self).__init__(path)
         self.pluginid = int(pluginid)
+        self.name = toolname
 
     def get_icon(self, column):
         icon = None
@@ -464,26 +506,14 @@ class ToolNode(ToolPresetFolder):
         doc.SetAction(self.pluginid)
         c4d.EventAdd()
 
-    def get_bg_col(self, column, area, bgcol):
+    def get_bg_col(self, row):
         col = None
-        """
         doc = GetActiveDocument()
         if doc.GetAction() == self.pluginid:
             col = options.active_tool_color
-        """
-        if not col:
-            col = bgcol
         return col
 
-    def get_text_col(self, column, area, col):
-        doc = GetActiveDocument()
-        if doc.GetAction() == self.pluginid:
-            if self.selected:
-                col = options.active_tool_selected or col
-            else:
-                col = options.active_tool_deselected or col
 
-        return col
 
 
 class ToolsPresetsHierarchy(TreeViewFunctions):
@@ -520,16 +550,20 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
         return curr.child
 
     def GetName(self, root, ud, curr):
-        return curr.name
+        if isinstance(curr, ToolPreset) and not curr.loaded:
+            return '[!] {0}'.format(curr.name)
+        else:
+            return curr.name
 
     def SetName(self, root, ud, curr, name):
         if not name:
             MessageDialog(res.string('IDS_ERROR_NAMEEMPTY'))
             return
 
-        if not curr.rename(name):
-            # Add the message to the messages list.
-            messages.append(res.string('IDC_ERROR_RENAMEFAILED', curr.name, name))
+        try:
+            curr.rename(name)
+        except (IOError, OSError) as exc:
+            MessageDialog(res.string('IDC_ERROR_RENAMEFAILED', curr.name, name))
 
         c4d.SpecialEventAdd(MSG_TOOLPRESETS_REFRESH)
 
@@ -541,6 +575,10 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
 
     def GetColumnWidth(self, root, ud, curr, col, area):
         return curr.get_column_width(col, area)
+
+    def GetBackgroundColor(self, root, ud, curr, row, color):
+        color = curr.get_bg_col(row)
+        return color or c4d.COLOR_BG
 
     def DrawCell(self, root, ud, curr, column, df, bgcol):
         curr.draw_cell(column, df, bgcol)
@@ -585,25 +623,27 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
         elif count == 1:
             message = res.string('IDC_ASK_REMOVENODE')
         else:
-            message = res.string('IDC_ASK_REMOVENODE_MULTIPLE', count)
+            message = res.string('IDC_ASK_REMOVENODE_MULTIPLE', str(count))
 
         result = MessageDialog(message, c4d.GEMB_YESNO)
         if result == c4d.GEMB_R_YES:
             errors = []
             def callback(x):
                 if x.selected:
-                    if not x.delete():
-                        errors.append(x)
-                    return False
+                    try:
+                        x.delete()
+                    except (IOError, OSError) as exc:
+                        errors.append(exc)
                 return True
             root.traverse(callback)
 
             if errors:
-                fmt = ', '.join(e.name for e in errors)
+                fmt = '\n'.join(map(str, errors))
                 msg = res.string('IDC_ERROR_PRESETSNOTREMOVED', fmt)
                 MessageDialog(msg)
 
     def CreateContextMenu(self, root, ud, curr, column, bc):
+        bc.RemoveData(c4d.ID_TREEVIEW_CONTEXT_RESET)
         add = ''
 
         if not curr:
@@ -617,8 +657,9 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
     def ContextMenuCall(self, root, ud, curr, column, command):
         if command == res.CONTEXT_NEWFOLDER:
             name = c4d.gui.RenameDialog(res.string('IDC_FOLDER'))
+            if not name:
+                return True
             name = name.replace('\\', '').replace('/', '')
-            if not name: return True
 
             if isinstance(curr, (ToolNode, ToolPresetFolder)):
                 parent = curr
@@ -629,8 +670,8 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
 
             path = os.path.join(parent.path, name)
             if os.path.isdir(path):
-                MessageDialog(res.string('IDC_ERROR_FOLDEREXISTS'), name)
-                return
+                MessageDialog(res.string('IDC_ERROR_FOLDEREXISTS', name))
+                return True
 
             try:
                 os.makedirs(path)
@@ -638,7 +679,7 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
                 MessageDialog(res.string('IDC_ERROR_FOLDERCREATIONFAILED', name))
                 return True
 
-            new = ToolPresetFolder(name, path)
+            new = ToolPresetFolder(path)
             parent.append(new)
             parent.open = True
             c4d.SpecialEventAdd(MSG_TOOLPRESETS_REFRESH)
@@ -648,18 +689,9 @@ class ToolsPresetsHierarchy(TreeViewFunctions):
                 return True
 
             c4d.storage.ShowInFinder(curr.path)
-        elif command == c4d.ID_TREEVIEW_CONTEXT_RESET:
-            result = MessageDialog(res.string('IDC_ASK_REMOVEALL'), c4d.GEMB_YESNO)
-            if result != c4d.GEMB_R_YES:
-                return True
-
-            first = self.GetFirst(root, ud)
-            for child in first.list_children():
-                child.delete()
-            c4d.SpecialEventAdd(MSG_TOOLPRESETS_REFRESH)
-            return True
 
         return False
+
 
 class ToolPresetsDialog(GeDialog):
 
@@ -674,12 +706,13 @@ class ToolPresetsDialog(GeDialog):
 
     def __init__(self):
         super(ToolPresetsDialog, self).__init__()
+        self.AddGadget(c4d.DIALOG_NOMENUBAR, 0)
         self.root = RootNode()
         self.model = ToolsPresetsHierarchy()
 
     def Reload(self):
         self.last_tool = -1
-        for child in self.root.list_children():
+        for child in self.root.iter_children():
             child.remove()
 
         path = pdata.preset_path
@@ -702,14 +735,14 @@ class ToolPresetsDialog(GeDialog):
                     continue
 
                 pluginid = split[0]
-                name = split[1] if len(split) > 1 else ''
+                toolname = split[1] if len(split) > 1 else ''
 
                 try:
                     pluginid = int(pluginid)
                 except ValueError:
                     continue
 
-                node = ToolNode(pluginid, name, folder_full)
+                node = ToolNode(pluginid, folder_full, toolname)
                 self.FillNode(node, folder_full, items)
                 self.root.append(node, 0)
 
@@ -721,49 +754,17 @@ class ToolPresetsDialog(GeDialog):
             items = os.listdir(folder)
 
         for filename in items:
-            basename = filename
-            filename = os.path.join(folder, filename)
-
             is_preset = filename.endswith(options.presets_suffix)
-            if is_preset and os.path.isfile(filename):
-                data = self.LoadFile(filename)
-                if data:
-                    preset = ToolPreset(data, basename, filename)
-                    node.append(preset, 0)
-            elif os.path.isdir(filename):
-                fnode = ToolPresetFolder(basename, filename)
-                self.FillNode(fnode, filename)
-                node.append(fnode, 0)
+            path = os.path.join(folder, filename)
 
-    def LoadFile(self, filename):
-        if not os.path.isfile(filename):
-            return
+            if is_preset and os.path.isfile(path):
+                preset = ToolPreset(path)
+                node.append(preset)
+            elif os.path.isdir(path):
+                fnode = ToolPresetFolder(path)
+                self.FillNode(fnode, path)
+                node.append(fnode)
 
-        hf = HyperFile()
-        success = hf.Open(0, filename, c4d.FILEOPEN_READ, c4d.FILEDIALOG_NONE)
-        if not success:
-            return
-
-        bc = hf.ReadContainer()
-        hf.Close()
-        return bc
-
-    def SaveFile(self, filename, data):
-        dirname = os.path.dirname(filename)
-        if not os.path.isdir(dirname):
-            try:
-                os.makedirs(dirname)
-            except OSError:
-                return 'denied'
-
-        hf = HyperFile()
-        success = hf.Open(0, filename, c4d.FILEOPEN_WRITE, c4d.FILEDIALOG_NONE)
-        if not success:
-            return 'fail'
-
-        hf.WriteContainer(data)
-        hf.Close()
-        return 'ok'
 
     def SaveState(self):
         doc = GetActiveDocument()
@@ -780,10 +781,10 @@ class ToolPresetsDialog(GeDialog):
             return
 
         # Check if such a tool already exists.
-        toolnode = None
         for toolnode in self.root.iter_children():
             if toolnode.pluginid == pluginid:
                 break
+        else:
             toolnode = None
 
         # Check if only one node is selected.
@@ -809,28 +810,22 @@ class ToolPresetsDialog(GeDialog):
                 MessageDialog(res.string('IDC_ERROR_FOLDERCREATIONFAILED', folder))
                 return False
 
-            toolnode = ToolNode(pluginid, toolname, dirname)
+            toolnode = ToolNode(pluginid, dirname, toolname)
             self.root.append(toolnode)
 
         if not parent:
             parent = toolnode
 
         dirname = parent.path
-        filename = os.path.join(dirname, name) + options.presets_suffix
-        status = self.SaveFile(filename, data)
-
-        message = None
-        if status == 'fail':
-            message = res.string('IDS_ERROR_FILENOTOPENED', filename)
-        elif status == 'denied':
-            message = res.string('IDS_ERROR_ACCESSDENIED', filename)
-
-        if message:
-            MessageDialog(message)
+        path = os.path.join(dirname, name) + options.presets_suffix
+        try:
+            ToolPreset(path, data).save()
+        except (IOError, OSError) as exc:
+            MessageDialog(str(exc))
             return False
 
         self.root.select_all(False)
-        node = ToolPreset(data, name, filename)
+        node = ToolPreset(path, data)
         parent.append(node)
         node.selected = True
         parent.open = True
@@ -894,46 +889,43 @@ class ToolPresetsDialog(GeDialog):
         self.SetTitle(res.string('IDS_TOOLPRESETS'))
         fullfit = c4d.BFH_SCALEFIT | c4d.BFV_SCALEFIT
 
-        # Menu-line Group
-        if not self.GroupBeginInMenuLine():
-            return False
-        self.GroupSpace(4, 0)
-        if not self.GroupBegin(res.GRP_TOOL, 0):
-            return False
-        self.AddStaticText(res.STR_TOOL, 0)
-        self.bmpb_tool = self.AddBitmapButton(res.BMPB_TOOL, None)
-        self.AddStaticText(0, 0, name=':')
-        self.GroupEnd()
+        self.GroupSpace(0, 0)
+        self.GroupBorderSpace(2, 2, 2, 2)
 
-        self.bmpb_save = self.AddBitmapButton(
-                res.BMPB_SAVE, options.icon_save)
-        self.bmpb_reload = self.AddBitmapButton(
-                res.BMPB_RELOAD, options.icon_reload)
+        # Top-line Group
+        if self.GroupBegin(0, c4d.BFH_SCALEFIT):
+            self.GroupSpace(4, 0)
+            self.AddGadget(c4d.DIALOG_PIN, 0)
 
-        self.AddCheckbox(res.CHK_ALL, 0, 0, 0, name=res.string('CHK_ALL'))
-        self.GroupEnd()
+            if self.GroupBegin(res.GRP_TOOL, c4d.BFH_SCALEFIT):
+                self.bmpb_tool = self.AddBitmapButton(res.BMPB_TOOL, None)
+                self.AddStaticText(res.STR_TOOL, 0)
+                self.GroupEnd()
+
+            self.bmpb_save = self.AddBitmapButton(
+                    res.BMPB_SAVE, options.icon_save)
+            self.AddCheckbox(res.CHK_ALL, 0, 0, 0, name=res.string('CHK_ALL'))
+            self.GroupEnd()
+
+        self.AddSeparatorH(0)
 
         # Tree-View Group
-        if not self.GroupBegin(res.GRP_MAIN, fullfit, cols=1):
-            return False
-        cd = BaseContainer()
-        cd.SetBool(c4d.TREEVIEW_ALTERNATE_BG, True)
-        self.tree = self.AddCustomGui(
-                res.TREEVIEW, c4d.CUSTOMGUI_TREEVIEW, "", fullfit,
-                0, 0, cd)
-        self.GroupEnd()
+        if self.GroupBegin(res.GRP_MAIN, fullfit, cols=1):
+            self.tree = self.AddCustomGui(
+                res.TREEVIEW, c4d.CUSTOMGUI_TREEVIEW, "", fullfit, 0, 0)
+            self.GroupEnd()
 
+        self.UpdateMenuLine()
         return True
 
     def InitValues(self):
-        self.UpdateMenuLine()
         if not self.tree:
             return False
 
         layout = BaseContainer()
         layout.SetLong(res.COLUMN_MAIN, c4d.LV_USERTREE)
-        self.model.show_all = False
-        self.SetBool(res.CHK_ALL, False)
+        self.model.show_all = pdata.show_all
+        self.SetBool(res.CHK_ALL, pdata.show_all)
         self.tree.SetLayout(1, layout)
         self.tree.SetRoot(self.root, self.model, None)
         self.Reload()
@@ -943,24 +935,20 @@ class ToolPresetsDialog(GeDialog):
     def Command(self, id, msg):
         if id == res.BMPB_SAVE:
             self.SaveState()
-        elif id == res.BMPB_RELOAD:
-            self.Reload()
         elif id == res.BMPB_TOOL:
             doc = GetActiveDocument()
             doc.SetAction(doc.GetAction())
             c4d.EventAdd()
         elif id == res.CHK_ALL:
+            pdata.show_all = self.GetLong(res.CHK_ALL)
             self.model.show_all = self.GetLong(res.CHK_ALL)
             self.Reload()
         return True
 
     def CoreMessage(self, id, msg):
-        # Process messages that are to be displayed.
-        for message in messages:
-            MessageDialog(message)
-        messages[:] = []
-
         if id == c4d.EVMSG_CHANGE:
+            if not self.selftriggered:
+                self.root.select_all(False)
             self.Refresh()
             self.UpdateMenuLine()
         elif id == MSG_TOOLPRESETS_RELOAD:
@@ -971,6 +959,7 @@ class ToolPresetsDialog(GeDialog):
             self.selftriggered = True
         return True
 
+
 class ToolPresetsCommand(c4d.plugins.CommandData):
 
     @property
@@ -980,10 +969,10 @@ class ToolPresetsCommand(c4d.plugins.CommandData):
         return self._dialog
 
 
-    PLUGIN_ID = 1000005
+    PLUGIN_ID = PLUGIN_ID
     PLUGIN_NAME = res.string('IDS_TOOLPRESETS')
     PLUGIN_HELP = res.string('IDS_TOOLPRESETS_HELP')
-    PLUGIN_ICON = res.bitmap('icon.tif')
+    PLUGIN_ICON = res.bitmap('res', 'icon.tif')
 
     def register(self):
         return c4d.plugins.RegisterCommandPlugin(
@@ -1001,42 +990,17 @@ class ToolPresetsCommand(c4d.plugins.CommandData):
         return self.dialog.Restore(self.PLUGIN_ID, secret)
 
 
-class Data(object):
 
-    ID_DATA = ToolPresetsCommand.PLUGIN_ID
-    ID_PRESET_PATHS = 1000
 
-    DEFAULT_PATH = c4d.storage.GeGetC4DPath(c4d.C4D_PATH_LIBRARY_USER)
-    DEFAULT_PATH = os.path.join(DEFAULT_PATH, 'toolpresets')
-
-    @property
-    def data(self):
-        return c4d.plugins.GetWorldPluginData(self.ID_DATA) \
-               or BaseContainer()
-
-    @data.setter
-    def data(self, bc):
-        c4d.plugins.SetWorldPluginData(self.ID_DATA, data, True)
-
-    @property
-    def preset_path(self):
-        bc = self.data
-        return bc.GetString(self.ID_PRESET_PATHS, self.DEFAULT_PATH)
-
-    @preset_path.setter
-    def preset_path(self, paths):
-        bc = BaseContainer()
-        bc.SetString(self.ID_PRESET_PATHS, paths)
-        self.data = bc
-
-pdata = Data()
+def PluginMessage(msg_type, data):
+    if msg_type in [c4d.C4DPL_RELOADPYTHONPLUGINS, c4d.C4DPL_ENDPROGRAM]:
+        pdata.save()
+    return True
 
 
 def main():
-    init_options()
     ToolPresetsCommand().register()
+
 
 if __name__ == '__main__':
     main()
-
-
