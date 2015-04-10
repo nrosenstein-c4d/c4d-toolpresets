@@ -54,10 +54,9 @@ CONTEXT_OPEN                   = 18
 TREEVIEW                       = 19
 COLUMN_MAIN                    = 20
 BMPB_SAVE                      = 21
-BMPB_RELOAD                    = 22
+BMPB_TOOL                      = 22
 STR_TOOL                       = 23
-BMPB_TOOL                      = 24
-GRP_MAIN                       = 25
-GRP_TOOL                       = 26
-CHK_ALL                        = 27
+GRP_MAIN                       = 24
+GRP_TOOL                       = 25
+CHK_ALL                        = 26
 
