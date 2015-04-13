@@ -1,0 +1,5 @@
+Copyright (C) 2015  Niklas Rosenstein
+All rights reserved.
+
+This program is free software. It comes without any warranty, to the
+extent permitted by applicable law.
