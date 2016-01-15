@@ -128,7 +128,7 @@ import shutil
 import sys
 import webbrowser
 
-with _localimport('res/modules', eggs=True) as importer:
+with _localimport('res/modules' + sys.version[:3], eggs=True) as importer:
   from c4dtools.gui import IconView
   from c4dtools.structures.treenode import TreeNode
 
