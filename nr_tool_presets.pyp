@@ -6,13 +6,12 @@ __version__ = '2.0'
 
 exec("""
 #__author__='Niklas Rosenstein <rosensteinniklas@gmail.com>'
-#__version__='1.1'
-import glob,os,sys
+#__version__='1.4.10'
+import glob,os,pkgutil,sys,traceback,zipfile
 class _localimport(object):
  _py3k=sys.version_info[0]>=3
- _builtins=__import__('builtins')if _py3k else __import__('__builtin__')
  _string_types=(str,)if _py3k else(basestring,)
- def __init__(self,path,parent_dir=os.path.dirname(__file__),eggs=False):
+ def __init__(self,path,parent_dir=os.path.dirname(__file__),do_eggs=True,do_pth=True):
   super(_localimport,self).__init__()
   self.path=[]
   if isinstance(path,self._string_types):
@@ -20,85 +19,168 @@ class _localimport(object):
   for path_name in path:
    if not os.path.isabs(path_name):
     path_name=os.path.join(parent_dir,path_name)
+   path_name=os.path.normpath(path_name)
    self.path.append(path_name)
-   if eggs:
+   if do_eggs:
     self.path.extend(glob.glob(os.path.join(path_name,'*.egg')))
   self.meta_path=[]
   self.modules={}
+  self.do_pth=do_pth
   self.in_context=False
  def __enter__(self):
-  self.original_import=self._builtins.__import__
-  import_hook=self._get_import_hook(self._builtins.__import__)
-  self._mock(self._builtins,'__import__')(import_hook)
-  self.state={'captured_globals':globals(),'path':sys.path[:],'meta_path':sys.meta_path[:],'disables':{},}
-  sys.path[:]=self.path+sys.path
-  sys.meta_path[:]=self.meta_path
+  try:import pkg_resources;nsdict=pkg_resources._namespace_packages.copy()
+  except ImportError:nsdict=None
+  self.state={'nsdict':nsdict,'nspaths':{},'path':sys.path[:],'meta_path':sys.meta_path[:],'disables':{},'pkgutil.extend_path':pkgutil.extend_path,}
+  sys.path[:]=self.path
+  sys.meta_path[:]=self.meta_path+sys.meta_path
+  pkgutil.extend_path=self._extend_path
   for key,mod in self.modules.items():
-   try:
-    self.state['disables'][key]=sys.modules.pop(key)
-   except KeyError:
-    pass
+   try:self.state['disables'][key]=sys.modules.pop(key)
+   except KeyError:pass
    sys.modules[key]=mod
+  if self.do_pth:
+   for path_name in self.path:
+    for fn in glob.glob(os.path.join(path_name,'*.pth')):
+     self._eval_pth(fn,path_name)
+  for path in sys.path:
+   for module in self._discover(path):
+    sub=module+'.'
+    for key,mod in sys.modules.items():
+     if key==module or key.startswith(sub):
+      self.state['disables'][key]=sys.modules.pop(key)
+  sys.path+=self.state['path']
+  for key,mod in sys.modules.items():
+   if mod is None:
+    prefix=key.rpartition('.')[0]
+    if hasattr(sys.modules.get(prefix),'__path__'):
+     del sys.modules[key]
+   elif hasattr(mod,'__path__'):
+    self.state['nspaths'][key]=mod.__path__[:]
+    mod.__path__=pkgutil.extend_path(mod.__path__,mod.__name__)
   self.in_context=True
   return self
  def __exit__(self,*__):
   if not self.in_context:
    raise RuntimeError('context not entered')
-  self._unmock(self._builtins,'__import__')
-  del self.original_import
+  local_paths=[]
+  for path in sys.path:
+   if path not in self.state['path']:
+    local_paths.append(path)
+  for key,path in self.state['nspaths'].items():
+   sys.modules[key].__path__=path
   for meta in sys.meta_path:
    if meta is not self and meta not in self.state['meta_path']:
     if meta not in self.meta_path:
      self.meta_path.append(meta)
-  for key,mod in sys.modules.items():
+  modules=sys.modules.copy()
+  for key,mod in modules.items():
+   force_pop=False
    filename=getattr(mod,'__file__',None)
-   if not filename:
-    continue
-   if key in self.state['disables']or self._is_local(filename):
+   if not filename and key not in sys.builtin_module_names:
+    parent=key.rsplit('.',1)[0]
+    if parent in modules:
+     filename=getattr(modules[parent],'__file__',None)
+    else:
+     force_pop=True
+   if force_pop or(filename and self._is_local(filename,local_paths)):
     self.modules[key]=sys.modules.pop(key)
   sys.modules.update(self.state['disables'])
   sys.path[:]=self.state['path']
   sys.meta_path[:]=self.state['meta_path']
+  pkgutil.extend_path=self.state['pkgutil.extend_path']
+  try:
+   import pkg_resources
+   pkg_resources._namespace_packages.clear()
+   pkg_resources._namespace_packages.update(self.state['nsdict'])
+  except ImportError:pass
   self.in_context=False
   del self.state
- def load(self,fullname,return_root=True):
-  if not self.in_context:
-   with self:
-    return self.load(fullname,return_root)
-  parts=fullname.split('.')
-  if parts[0]not in sys.builtin_module_names:
-   self._disable_module(parts[0])
-  root=module=self.original_import(fullname)
-  if not return_root:
-   for part in parts[1:]:
-    module=getattr(module,part)
-  return module
- def _disable_module(self,fullname):
-  if not self.in_context:
-   raise RuntimeError('_localimport context not entered')
-  for key,mod in sys.modules.items():
-   if key==fullname or key.startswith(fullname+'.'):
-    filename=getattr(mod,'__file__',None)
-    if filename and self._is_local(filename):
-     continue
-    self.state['disables'][key]=sys.modules.pop(key)
- def _get_import_hook(self,original):
-  def import_hook(name,*args,**kwargs):
-   if not self.in_context:
-    raise RuntimeError('_localimport context not entered')
-   captured_globals=self.state['captured_globals']
-   if sys._getframe().f_back.f_globals is captured_globals:
-    if name not in sys.builtin_module_names:
-     self._disable_module(name.split('.')[0])
-   return original(name,*args,**kwargs)
-  return import_hook
- def _is_local(self,filename):
+ def _is_local(self,filename,pathlist):
   filename=os.path.abspath(filename)
-  for path_name in self.path:
+  for path_name in pathlist:
    path_name=os.path.abspath(path_name)
    if self._is_subpath(filename,path_name):
     return True
   return False
+ def _eval_pth(self,filename,sitedir):
+  if not os.path.isfile(filename):
+   return
+  with open(filename,'r')as fp:
+   for index,line in enumerate(fp):
+    if line.startswith('import'):
+     line_fn='{0}#{1}'.format(filename,index+1)
+     try:
+      exec compile(line,line_fn,'exec')
+     except BaseException:
+      traceback.print_exc()
+    else:
+     index=line.find('#')
+     if index>0:line=line[:index]
+     line=line.strip()
+     if not os.path.isabs(line):
+      line=os.path.join(os.path.dirname(filename),line)
+     line=os.path.normpath(line)
+     if line and line not in sys.path:
+      sys.path.insert(0,line)
+ def _extend_path(self,pth,name):
+  def zip_isfile(z,name):
+   name.rstrip('/')
+   return name in z.namelist()
+  pname=os.path.join(*name.split('.'))
+  zname='/'.join(name.split('.'))
+  init_py='__init__'+os.extsep+'py'
+  init_pyc='__init__'+os.extsep+'pyc'
+  init_pyo='__init__'+os.extsep+'pyo'
+  mod_path=list(pth)
+  for path in sys.path:
+   if zipfile.is_zipfile(path):
+    try:
+     egg=zipfile.ZipFile(path,'r')
+     addpath=(zip_isfile(egg,zname+'/__init__.py')or zip_isfile(egg,zname+'/__init__.pyc')or zip_isfile(egg,zname+'/__init__.pyo'))
+     fpath=os.path.join(path,path,zname)
+     if addpath and fpath not in mod_path:
+      mod_path.append(fpath)
+    except(zipfile.BadZipfile,zipfile.LargeZipFile):
+     pass
+   else:
+    path=os.path.join(path,pname)
+    if os.path.isdir(path)and path not in mod_path:
+     addpath=(os.path.isfile(os.path.join(path,init_py))or os.path.isfile(os.path.join(path,init_pyc))or os.path.isfile(os.path.join(path,init_pyo)))
+     if addpath and path not in mod_path:
+      mod_path.append(path)
+  return[os.path.normpath(x)for x in mod_path]
+ def _discover(self,pth):
+  def del_suffix(name):
+   return name.rpartition(os.extsep)[0]
+  def is_py(name):
+   return any(name.endswith(s)for s in suffixes)
+  def is_package(path):
+   for s in suffixes:
+    fn=os.path.join(path,'__init__'+s)
+    if os.path.isfile(fn):
+     return True
+   return False
+  suffixes=[os.extsep+s for s in('py','pyc','pyo')]
+  modules=set()
+  if os.path.isdir(pth):
+   for name in os.listdir(pth):
+    if is_package(os.path.join(pth,name)):
+     modules.add(name)
+    elif is_py(name):
+     modules.add(del_suffix(name))
+  elif zipfile.is_zipfile(pth):
+   try:
+    egg=zipfile.ZipFile(pth,'r')
+    for name in egg.namelist():
+     if not is_py(name):
+      continue
+     name=del_suffix(name).replace('/','.')
+     if name.endswith('.__init__'):
+      name=name.rpartition('.')[0]
+     modules.add(name)
+   except(zipfile.BadZipfile,zipfile.LargeZipFile):
+    pass
+  return modules
  @staticmethod
  def _is_subpath(path,ask_dir):
   try:
@@ -106,19 +188,8 @@ class _localimport(object):
   except ValueError:
    return False
   return relpath==os.curdir or not relpath.startswith(os.pardir)
- @staticmethod
- def _mock(obj,attr):
-  def decorator(func):
-   func.original=getattr(obj,attr)
-   setattr(obj,attr,func)
-   return func
-  return decorator
- @staticmethod
- def _unmock(obj,attr):
-  data=getattr(obj,attr)
-  setattr(obj,attr,getattr(data,'original'))
-  return data
 """)
+
 
 import c4d
 import os
@@ -128,7 +199,7 @@ import shutil
 import sys
 import webbrowser
 
-with _localimport('res/modules' + sys.version[:3], eggs=True) as importer:
+with _localimport('res/modules' + sys.version[:3]) as importer:
   from c4dtools.gui import IconView
   from c4dtools.structures.treenode import TreeNode
 
