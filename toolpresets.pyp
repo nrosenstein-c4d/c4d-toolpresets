@@ -2,193 +2,46 @@
 # Copyright (C) 2015  Niklas Rosenstein
 # All rights reserved.
 
+from __future__ import print_function
 __version__ = '2.0'
 
-exec("""
-#__author__='Niklas Rosenstein <rosensteinniklas@gmail.com>'
-#__version__='1.4.10'
-import glob,os,pkgutil,sys,traceback,zipfile
-class _localimport(object):
- _py3k=sys.version_info[0]>=3
- _string_types=(str,)if _py3k else(basestring,)
- def __init__(self,path,parent_dir=os.path.dirname(__file__),do_eggs=True,do_pth=True):
-  super(_localimport,self).__init__()
-  self.path=[]
-  if isinstance(path,self._string_types):
-   path=[path]
-  for path_name in path:
-   if not os.path.isabs(path_name):
-    path_name=os.path.join(parent_dir,path_name)
-   path_name=os.path.normpath(path_name)
-   self.path.append(path_name)
-   if do_eggs:
-    self.path.extend(glob.glob(os.path.join(path_name,'*.egg')))
-  self.meta_path=[]
-  self.modules={}
-  self.do_pth=do_pth
-  self.in_context=False
- def __enter__(self):
-  try:import pkg_resources;nsdict=pkg_resources._namespace_packages.copy()
-  except ImportError:nsdict=None
-  self.state={'nsdict':nsdict,'nspaths':{},'path':sys.path[:],'meta_path':sys.meta_path[:],'disables':{},'pkgutil.extend_path':pkgutil.extend_path,}
-  sys.path[:]=self.path
-  sys.meta_path[:]=self.meta_path+sys.meta_path
-  pkgutil.extend_path=self._extend_path
-  for key,mod in self.modules.items():
-   try:self.state['disables'][key]=sys.modules.pop(key)
-   except KeyError:pass
-   sys.modules[key]=mod
-  if self.do_pth:
-   for path_name in self.path:
-    for fn in glob.glob(os.path.join(path_name,'*.pth')):
-     self._eval_pth(fn,path_name)
-  for path in sys.path:
-   for module in self._discover(path):
-    sub=module+'.'
-    for key,mod in sys.modules.items():
-     if key==module or key.startswith(sub):
-      self.state['disables'][key]=sys.modules.pop(key)
-  sys.path+=self.state['path']
-  for key,mod in sys.modules.items():
-   if mod is None:
-    prefix=key.rpartition('.')[0]
-    if hasattr(sys.modules.get(prefix),'__path__'):
-     del sys.modules[key]
-   elif hasattr(mod,'__path__'):
-    self.state['nspaths'][key]=mod.__path__[:]
-    mod.__path__=pkgutil.extend_path(mod.__path__,mod.__name__)
-  self.in_context=True
-  return self
- def __exit__(self,*__):
-  if not self.in_context:
-   raise RuntimeError('context not entered')
-  local_paths=[]
-  for path in sys.path:
-   if path not in self.state['path']:
-    local_paths.append(path)
-  for key,path in self.state['nspaths'].items():
-   sys.modules[key].__path__=path
-  for meta in sys.meta_path:
-   if meta is not self and meta not in self.state['meta_path']:
-    if meta not in self.meta_path:
-     self.meta_path.append(meta)
-  modules=sys.modules.copy()
-  for key,mod in modules.items():
-   force_pop=False
-   filename=getattr(mod,'__file__',None)
-   if not filename and key not in sys.builtin_module_names:
-    parent=key.rsplit('.',1)[0]
-    if parent in modules:
-     filename=getattr(modules[parent],'__file__',None)
-    else:
-     force_pop=True
-   if force_pop or(filename and self._is_local(filename,local_paths)):
-    self.modules[key]=sys.modules.pop(key)
-  sys.modules.update(self.state['disables'])
-  sys.path[:]=self.state['path']
-  sys.meta_path[:]=self.state['meta_path']
-  pkgutil.extend_path=self.state['pkgutil.extend_path']
-  try:
-   import pkg_resources
-   pkg_resources._namespace_packages.clear()
-   pkg_resources._namespace_packages.update(self.state['nsdict'])
-  except ImportError:pass
-  self.in_context=False
-  del self.state
- def _is_local(self,filename,pathlist):
-  filename=os.path.abspath(filename)
-  for path_name in pathlist:
-   path_name=os.path.abspath(path_name)
-   if self._is_subpath(filename,path_name):
-    return True
-  return False
- def _eval_pth(self,filename,sitedir):
-  if not os.path.isfile(filename):
-   return
-  with open(filename,'r')as fp:
-   for index,line in enumerate(fp):
-    if line.startswith('import'):
-     line_fn='{0}#{1}'.format(filename,index+1)
-     try:
-      exec compile(line,line_fn,'exec')
-     except BaseException:
-      traceback.print_exc()
-    else:
-     index=line.find('#')
-     if index>0:line=line[:index]
-     line=line.strip()
-     if not os.path.isabs(line):
-      line=os.path.join(os.path.dirname(filename),line)
-     line=os.path.normpath(line)
-     if line and line not in sys.path:
-      sys.path.insert(0,line)
- def _extend_path(self,pth,name):
-  def zip_isfile(z,name):
-   name.rstrip('/')
-   return name in z.namelist()
-  pname=os.path.join(*name.split('.'))
-  zname='/'.join(name.split('.'))
-  init_py='__init__'+os.extsep+'py'
-  init_pyc='__init__'+os.extsep+'pyc'
-  init_pyo='__init__'+os.extsep+'pyo'
-  mod_path=list(pth)
-  for path in sys.path:
-   if zipfile.is_zipfile(path):
-    try:
-     egg=zipfile.ZipFile(path,'r')
-     addpath=(zip_isfile(egg,zname+'/__init__.py')or zip_isfile(egg,zname+'/__init__.pyc')or zip_isfile(egg,zname+'/__init__.pyo'))
-     fpath=os.path.join(path,path,zname)
-     if addpath and fpath not in mod_path:
-      mod_path.append(fpath)
-    except(zipfile.BadZipfile,zipfile.LargeZipFile):
-     pass
-   else:
-    path=os.path.join(path,pname)
-    if os.path.isdir(path)and path not in mod_path:
-     addpath=(os.path.isfile(os.path.join(path,init_py))or os.path.isfile(os.path.join(path,init_pyc))or os.path.isfile(os.path.join(path,init_pyo)))
-     if addpath and path not in mod_path:
-      mod_path.append(path)
-  return[os.path.normpath(x)for x in mod_path]
- def _discover(self,pth):
-  def del_suffix(name):
-   return name.rpartition(os.extsep)[0]
-  def is_py(name):
-   return any(name.endswith(s)for s in suffixes)
-  def is_package(path):
-   for s in suffixes:
-    fn=os.path.join(path,'__init__'+s)
-    if os.path.isfile(fn):
-     return True
-   return False
-  suffixes=[os.extsep+s for s in('py','pyc','pyo')]
-  modules=set()
-  if os.path.isdir(pth):
-   for name in os.listdir(pth):
-    if is_package(os.path.join(pth,name)):
-     modules.add(name)
-    elif is_py(name):
-     modules.add(del_suffix(name))
-  elif zipfile.is_zipfile(pth):
-   try:
-    egg=zipfile.ZipFile(pth,'r')
-    for name in egg.namelist():
-     if not is_py(name):
-      continue
-     name=del_suffix(name).replace('/','.')
-     if name.endswith('.__init__'):
-      name=name.rpartition('.')[0]
-     modules.add(name)
-   except(zipfile.BadZipfile,zipfile.LargeZipFile):
-    pass
-  return modules
- @staticmethod
- def _is_subpath(path,ask_dir):
-  try:
-   relpath=os.path.relpath(path,ask_dir)
-  except ValueError:
-   return False
-  return relpath==os.curdir or not relpath.startswith(os.pardir)
-""")
+# localimport-v1.7.3-blob-mcw99
+import base64 as b, types as t, zlib as z; m=t.ModuleType('localimport');
+m.__file__ = __file__; blob=b'\
+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'
+exec(z.decompress(b.b64decode(blob)), vars(m)); _localimport=m;localimport=getattr(m,"localimport")
+del blob, b, t, z, m;
 
 
 import c4d
@@ -199,7 +52,7 @@ import shutil
 import sys
 import webbrowser
 
-with _localimport('res/modules' + sys.version[:3]) as importer:
+with localimport('res/modules' + sys.version[:3]) as importer:
   from c4dtools.gui import IconView
   from c4dtools.structures.treenode import TreeNode
 
@@ -216,7 +69,7 @@ def get_logger():
   formatter = logging.Formatter('[%(name)s - %(levelname)s]: %(message)s')
   handler = logging.StreamHandler()
   handler.setFormatter(formatter)
-  logger = logging.Logger('nr_tool_presets_{0}'.format(__version__))
+  logger = logging.Logger('toolpresets{0}'.format(__version__))
   logger.addHandler(handler)
   return logger
 
@@ -944,8 +797,7 @@ def main():
   root = Node('<root>', TYPE_ROOT, root_dir)
 
   TP_Command(root).register()
-  print "Tool Presets", __version__, "registered"
-  print "Visit http://niklasrosenstein.com/"
+  print("Tool Presets", __version__, "registered")
 
 
 if __name__ == '__main__':
